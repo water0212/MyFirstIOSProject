@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>chatModelDefinitionIdentifier</key>
+	<dict>
+		<key>modelIdentifier</key>
+		<string>antigravity</string>
+		<key>providerIdentifier</key>
+		<dict>
+			<key>builtIn</key>
+			<dict>
+				<key>_0</key>
+				<dict>
+					<key>agents</key>
+					<dict/>
+				</dict>
+			</dict>
+		</dict>
+	</dict>
+	<key>conversationType</key>
+	<string>assistant</string>
+	<key>id</key>
+	<string>4143484A-04C7-4A45-A316-3762C4891845</string>
+	<key>lastActivityDate</key>
+	<date>2026-09-22T08:04:53Z</date>
+	<key>name</key>
+	<string>Bug report: Bug with panel and long press</string>
+	<key>startDate</key>
+	<date>2026-09-22T07:45:37Z</date>
+</dict>
+</plist>
