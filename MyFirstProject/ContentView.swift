@@ -71,6 +71,7 @@ struct ContentView: View {
     // GUI Controls & Settings
     @State private var initialPlatformWidth: Double = 120.0
     @State private var volatility: Double = 0.5
+    @State private var walkingSpeedIncrease: Double = 10.0
     @State private var showSettings: Bool = false
     
     // Game State
@@ -78,6 +79,13 @@ struct ContentView: View {
     @State private var score: Int = 0
     @State private var highScore: Int = 0
     @State private var statusMessage: String? = nil
+    @State private var currentWalkingSpeed: Double = 160.0
+    
+    // Previous platform & stick tracking for smooth camera transition
+    @State private var previousPlatformX: Double = 0.0
+    @State private var previousPlatformWidth: Double = 0.0
+    @State private var previousStickLength: Double = 0.0
+    @State private var previousStickAngle: Double = 0.0
     
     // Platforms (Absolute X positions and Widths)
     @State private var currentPlatformX: Double = 0.0
@@ -89,6 +97,9 @@ struct ContentView: View {
     // Stick
     @State private var stickLength: Double = 0.0
     @State private var stickAngle: Double = 0.0 // 0 = vertical up, 90 = horizontal right
+    @State private var trimmingBaseStickLength: Double = 0.0
+    @State private var canTrimWalkingStick: Bool = false
+    @State private var didTrimWalkingStick: Bool = false
     
     // Stickman Position
     @State private var stickmanX: Double = 0.0
@@ -98,8 +109,9 @@ struct ContentView: View {
     // Camera scroll offset
     @State private var cameraOffsetX: Double = 0.0
     
-    // Timer for stick growing
+    // Timers
     @State private var growTimer: Timer? = nil
+    @State private var rescueWalkTimer: Timer? = nil
     
     // Screen width tracking
     @State private var screenWidth: CGFloat = 400.0
@@ -116,6 +128,27 @@ struct ContentView: View {
                 // Game World Canvas (offset by camera)
                 ZStack(alignment: .bottomLeading) {
                     
+                    // 0. Previous Platform & Stick (Rendered during scrolling so old stick stays on old platform)
+                    if gameState == .scrolling {
+                        Rectangle()
+                            .fill(Color.gray)
+                            .frame(width: max(0, previousPlatformWidth), height: platformHeight)
+                            .position(
+                                x: previousPlatformX + previousPlatformWidth / 2,
+                                y: geometry.size.height - platformHeight / 2
+                            )
+                        
+                        let prevStickBaseX = previousPlatformX + previousPlatformWidth
+                        Rectangle()
+                            .fill(Color.black)
+                            .frame(width: 4, height: previousStickLength)
+                            .rotationEffect(.degrees(previousStickAngle), anchor: .bottom)
+                            .position(
+                                x: prevStickBaseX - 2,
+                                y: geometry.size.height - platformHeight - previousStickLength / 2
+                            )
+                    }
+                    
                     // 1. Starting / Current Platform (Grey)
                     Rectangle()
                         .fill(Color.gray)
@@ -131,10 +164,16 @@ struct ContentView: View {
                             .fill(Color.red)
                             .frame(width: max(0, targetPlatformWidth), height: platformHeight)
                         
-                        // Perfect Landing Center Marker
+                        // Perfect landing zones: wider zones give smaller bonuses, center zone gives the largest bonus.
+                        Rectangle()
+                            .fill(Color.yellow.opacity(0.35))
+                            .frame(width: max(0, targetPlatformWidth * 0.50), height: 6)
+                        Rectangle()
+                            .fill(Color.yellow.opacity(0.65))
+                            .frame(width: max(0, targetPlatformWidth * 0.25), height: 6)
                         Rectangle()
                             .fill(Color.yellow)
-                            .frame(width: min(8, targetPlatformWidth), height: 6)
+                            .frame(width: max(0, targetPlatformWidth * 0.10), height: 6)
                     }
                     .position(
                         x: targetPlatformX + targetPlatformWidth / 2,
@@ -246,6 +285,18 @@ struct ContentView: View {
                                         Slider(value: $volatility, in: 0.0...1.0, step: 0.05)
                                     }
                                     
+                                    // 3. Walking Speed Increase Control
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        HStack {
+                                            Text("速度遞增幅度:")
+                                                .font(.system(size: 13, weight: .medium))
+                                            Spacer()
+                                            Text("+\(Int(walkingSpeedIncrease))")
+                                                .font(.system(size: 13, weight: .bold))
+                                        }
+                                        Slider(value: $walkingSpeedIncrease, in: 0...60, step: 5)
+                                    }
+                                    
                                     Text("公式: 起始地面 - 起始地面 × (0 ~ 動盪區間)")
                                         .font(.system(size: 11))
                                         .foregroundColor(.gray)
@@ -278,8 +329,8 @@ struct ContentView: View {
                     Spacer()
                     
                     // Instruction Banner
-                    if gameState == .ready {
-                        Text("長按屏幕下半部伸長木板")
+                    if gameState == .ready || canTrimWalkingStick {
+                        Text(canTrimWalkingStick ? "角色行走時點按螢幕剪短木板，每次 -2%" : "長按螢幕下半部伸長木板")
                             .font(.system(size: 16, weight: .bold))
                             .foregroundColor(.gray)
                             .padding(.bottom, 60)
@@ -342,9 +393,23 @@ struct ContentView: View {
                     .frame(width: geometry.size.width, height: geometry.size.height)
                 }
             }
+            .simultaneousGesture(
+                TapGesture()
+                    .onEnded {
+                        if gameState == .walking && canTrimWalkingStick {
+                            trimWalkingStickByTap()
+                        }
+                    }
+            )
             .onAppear {
                 screenWidth = geometry.size.width
                 setupInitialGame()
+            }
+            .onDisappear {
+                growTimer?.invalidate()
+                growTimer = nil
+                rescueWalkTimer?.invalidate()
+                rescueWalkTimer = nil
             }
             .onChange(of: geometry.size.width) { _, newWidth in
                 screenWidth = newWidth
@@ -359,6 +424,14 @@ struct ContentView: View {
         cameraOffsetX = 0
         currentPlatformX = 0
         currentPlatformWidth = initialPlatformWidth
+        previousPlatformX = 0
+        previousPlatformWidth = 0
+        previousStickLength = 0
+        previousStickAngle = 0
+        currentWalkingSpeed = 160.0
+        trimmingBaseStickLength = 0
+        canTrimWalkingStick = false
+        didTrimWalkingStick = false
         
         // Spawn first target platform on screen
         targetPlatformWidth = generatePlatformWidth(from: currentPlatformWidth)
@@ -373,12 +446,14 @@ struct ContentView: View {
     private func resetGame() {
         growTimer?.invalidate()
         growTimer = nil
+        rescueWalkTimer?.invalidate()
+        rescueWalkTimer = nil
         withAnimation {
             setupInitialGame()
         }
     }
     
-    /// Target ground formula: 起始地面 - 起始地面 * (0 ~ 動盪區間)
+    /// Target ground formula: 起始地面 - 起始地面 × (0 ~ 動盪區間)
     private func generatePlatformWidth(from baseWidth: Double) -> Double {
         let randFactor = Double.random(in: 0...volatility)
         let generatedWidth = baseWidth - (baseWidth * randFactor)
@@ -388,6 +463,8 @@ struct ContentView: View {
     private func resetStickAndMan() {
         stickLength = 0
         stickAngle = 0
+        trimmingBaseStickLength = 0
+        canTrimWalkingStick = false
         stickmanX = currentPlatformX + currentPlatformWidth - 14
         stickmanY = 0
         isWalking = false
@@ -398,9 +475,11 @@ struct ContentView: View {
         statusMessage = nil
         
         growTimer?.invalidate()
-        growTimer = Timer.scheduledTimer(withTimeInterval: 0.016, repeats: true) { _ in
+        let timer = Timer(timeInterval: 0.016, repeats: true) { _ in
             stickLength += 3.5
         }
+        RunLoop.main.add(timer, forMode: .common)
+        growTimer = timer
     }
     
     private func stopGrowingAndRotate() {
@@ -421,33 +500,123 @@ struct ContentView: View {
         let stickTipX = currentPlatformX + currentPlatformWidth + stickLength
         let targetMinX = targetPlatformX
         let targetMaxX = targetPlatformX + targetPlatformWidth
+        
+        if stickTipX < targetMinX {
+            failLanding(destinationX: stickTipX)
+        } else if stickTipX > targetMaxX {
+            startStickTrimming()
+        } else {
+            completeSuccessfulLanding()
+        }
+    }
+    
+    private func completeSuccessfulLanding() {
+        let stickTipX = currentPlatformX + currentPlatformWidth + stickLength
         let targetCenter = targetPlatformX + (targetPlatformWidth / 2)
+        let landingDistanceFromCenter = abs(stickTipX - targetCenter)
+        let landingRatio = landingDistanceFromCenter / targetPlatformWidth
+        let scoreBonus: Int
+        
+        if didTrimWalkingStick {
+            scoreBonus = 1
+            statusMessage = "補救成功! +1"
+        } else if landingRatio <= 0.05 {
+            scoreBonus = 4
+            statusMessage = "完美核心! +4"
+        } else if landingRatio <= 0.125 {
+            scoreBonus = 3
+            statusMessage = "完美降落! +3"
+        } else if landingRatio <= 0.25 {
+            scoreBonus = 2
+            statusMessage = "精準降落! +2"
+        } else {
+            scoreBonus = 1
+            statusMessage = nil
+        }
+        
+        score += scoreBonus
+        if score > highScore {
+            highScore = score
+        }
+        
+        let destinationX = targetPlatformX + targetPlatformWidth - 14
+        walkAcrossStick(destinationX: destinationX) {
+            shiftWorldToNextPlatform()
+        }
+    }
+    
+    private func startStickTrimming() {
+        trimmingBaseStickLength = stickLength
+        canTrimWalkingStick = true
+        gameState = .walking
+        isWalking = true
+        statusMessage = "行走中點按螢幕剪短木板"
+        
+        rescueWalkTimer?.invalidate()
+        let timer = Timer(timeInterval: 0.016, repeats: true) { timer in
+            let stickEndX = currentPlatformX + currentPlatformWidth + stickLength - 14
+            let nextX = stickmanX + currentWalkingSpeed * 0.016
+            
+            if nextX >= stickEndX {
+                stickmanX = stickEndX
+                timer.invalidate()
+                rescueWalkTimer = nil
+                finishRescueWalk()
+            } else {
+                stickmanX = nextX
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        rescueWalkTimer = timer
+    }
+    
+    private func trimWalkingStickByTap() {
+        guard canTrimWalkingStick else {
+            return
+        }
+        
+        let trimAmount = max(1.0, trimmingBaseStickLength * 0.02)
+        let stickBaseX = currentPlatformX + currentPlatformWidth
+        let minimumLengthUnderPlayer = max(0, stickmanX + 14 - stickBaseX)
+        let newStickLength = max(minimumLengthUnderPlayer, stickLength - trimAmount)
+        
+        if newStickLength < stickLength {
+            didTrimWalkingStick = true
+            withAnimation(.easeOut(duration: 0.08)) {
+                stickLength = newStickLength
+            }
+        }
+    }
+    
+    private func finishRescueWalk() {
+        guard canTrimWalkingStick else {
+            return
+        }
+        
+        canTrimWalkingStick = false
+        isWalking = false
+        evaluateFinalStickEnd()
+    }
+    
+    private func evaluateFinalStickEnd() {
+        let stickTipX = currentPlatformX + currentPlatformWidth + stickLength
+        let targetMinX = targetPlatformX
+        let targetMaxX = targetPlatformX + targetPlatformWidth
         
         if stickTipX >= targetMinX && stickTipX <= targetMaxX {
-            // Success!
-            let isPerfect = abs(stickTipX - targetCenter) <= 6.0
-            if isPerfect {
-                score += 2
-                statusMessage = "完美降落! +2"
-            } else {
-                score += 1
-                statusMessage = nil
-            }
-            if score > highScore {
-                highScore = score
-            }
-            
-            // Walk to the right edge of target platform (next stick position)
-            let destinationX = targetPlatformX + targetPlatformWidth - 14
-            walkAcrossStick(destinationX: destinationX) {
-                shiftWorldToNextPlatform()
-            }
+            completeSuccessfulLanding()
         } else {
-            // Fail!
-            let failDestination = min(stickTipX, targetMaxX + 40)
-            walkAcrossStick(destinationX: failDestination) {
-                manFallDown()
-            }
+            statusMessage = stickTipX < targetMinX ? "木板剪太短了" : "木板仍然太長"
+            manFallDown()
+        }
+    }
+    
+    private func failLanding(destinationX: Double) {
+        let targetMaxX = targetPlatformX + targetPlatformWidth
+        let failDestination = min(destinationX, targetMaxX + 40)
+        
+        walkAcrossStick(destinationX: failDestination) {
+            manFallDown()
         }
     }
     
@@ -456,7 +625,7 @@ struct ContentView: View {
         isWalking = true
         
         let distance = destinationX - stickmanX
-        let walkDuration = max(0.4, distance / 160.0)
+        let walkDuration = max(0.2, distance / currentWalkingSpeed)
         
         withAnimation(.linear(duration: walkDuration)) {
             stickmanX = destinationX
@@ -487,14 +656,23 @@ struct ContentView: View {
     private func shiftWorldToNextPlatform() {
         gameState = .scrolling
         
-        // 1. 目標地面在此時轉換為起始地面
-        let oldTargetX = targetPlatformX
-        let oldTargetWidth = targetPlatformWidth
+        // 1. 保存舊地面與舊木板資訊，讓舊木板在鏡頭移動時固定在舊地面上隨畫面推移移出
+        previousPlatformX = currentPlatformX
+        previousPlatformWidth = currentPlatformWidth
+        previousStickLength = stickLength
+        previousStickAngle = stickAngle
         
-        currentPlatformX = oldTargetX
-        currentPlatformWidth = oldTargetWidth
+        // 2. 目標地面轉換為當前地面，並重置新木板為 0
+        currentWalkingSpeed += walkingSpeedIncrease
+        currentPlatformX = targetPlatformX
+        currentPlatformWidth = targetPlatformWidth
+        stickLength = 0
+        stickAngle = 0
+        trimmingBaseStickLength = 0
+        canTrimWalkingStick = false
+        didTrimWalkingStick = false
         
-        // 2. 生成全新的目標地面，位置在當前鏡頭可視區域右方之外（畫面外）
+        // 3. 生成全新的目標地面，位置在當前鏡頭可視區域右方之外（畫面外）
         let nextWidth = generatePlatformWidth(from: currentPlatformWidth)
         targetPlatformWidth = nextWidth
         
@@ -503,15 +681,13 @@ struct ContentView: View {
         let minNextX = max(currentPlatformX + currentPlatformWidth + 60.0, visibleRightEdge + 30.0)
         targetPlatformX = minNextX + Double.random(in: 0...50)
         
-        // 3. 畫面鏡頭平滑滾動，將起始地面移動到螢幕最左邊 (cameraOffsetX 滾動到 currentPlatformX)
+        // 4. 畫面鏡頭平滑滾動，將當前地面移動到螢幕最左邊 (cameraOffsetX 滾動到 currentPlatformX)
         withAnimation(.easeInOut(duration: 0.6)) {
             cameraOffsetX = currentPlatformX
         }
         
-        // 4. 滾動完成後重置木板，進入就緒狀態
+        // 5. 滾動完成後進入就緒狀態
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.62) {
-            stickLength = 0
-            stickAngle = 0
             gameState = .ready
         }
     }
