@@ -8,6 +8,7 @@ enum GameState {
     case falling
     case scrolling
     case gameOver
+    case levelCleared
 }
 
 struct StickmanView: View {
@@ -20,7 +21,7 @@ struct StickmanView: View {
             
             Canvas { context, size in
                 let w = size.width
-                let h = size.height
+                let ＿h = size.height
                 let centerX = w / 2
                 
                 // Head
@@ -68,6 +69,32 @@ struct StickmanView: View {
 }
 
 struct ContentView: View {
+    // Level Configuration Dictionary: [關卡索引: 關卡需要的分數]
+    private let levelRequirements: [Int: Int] = [
+        1: 3,
+        2: 6,
+        3: 10,
+        4: 15,
+        5: 20,
+        6: 25,
+        7: 30,
+        8: 35,
+        9: 40,
+        10: 50
+    ]
+    
+    // Save System (存檔系統持久化)
+    @AppStorage("unlockedMaxLevel") private var unlockedMaxLevel: Int = 1
+    @AppStorage("clearedMaxLevel") private var clearedMaxLevel: Int = 0
+    @AppStorage("savedHighScore") private var highScore: Int = 0
+    
+    // Main Menu State (主畫面狀態)
+    @State private var isShowingMainMenu: Bool = true
+    
+    // Level & Target Score Variables
+    @State private var currentLevelIndex: Int = 1
+    @State private var requiredScore: Int = 3
+    
     // GUI Controls & Settings
     @State private var initialPlatformWidth: Double = 120.0
     @State private var volatility: Double = 0.5
@@ -77,7 +104,6 @@ struct ContentView: View {
     // Game State
     @State private var gameState: GameState = .ready
     @State private var score: Int = 0
-    @State private var highScore: Int = 0
     @State private var statusMessage: String? = nil
     @State private var currentWalkingSpeed: Double = 160.0
     
@@ -119,11 +145,21 @@ struct ContentView: View {
     // Fixed platform height
     private let platformHeight: CGFloat = 200
     
+    /// 關卡每提升一階，背景越來越紅（第 1 關為純白色，隨著關卡提升逐漸變深紅）
+    private var levelBackgroundColor: Color {
+        let tier = max(0, currentLevelIndex - 1)
+        let intensity = min(1.0, Double(tier) * 0.1)
+        let otherChannels = 1.0 - (intensity * 0.75)
+        return Color(red: 1.0, green: otherChannels, blue: otherChannels)
+    }
+    
     var body: some View {
         GeometryReader { geometry in
             ZStack(alignment: .topLeading) {
-                // Background: Pure White
-                Color.white.ignoresSafeArea()
+                // Background: 關卡每提升一階，背景越來越紅
+                levelBackgroundColor
+                    .ignoresSafeArea()
+                    .animation(.easeInOut(duration: 0.5), value: currentLevelIndex)
                 
                 // Game World Canvas (offset by camera)
                 ZStack(alignment: .bottomLeading) {
@@ -204,8 +240,21 @@ struct ContentView: View {
                 // Top HUD / GUI Controls Overlay
                 VStack {
                     HStack(alignment: .top) {
-                        // Score Display on Top Left
+                        // Score & Level Display on Top Left
                         VStack(alignment: .leading, spacing: 4) {
+                            HStack(spacing: 6) {
+                                Text("第 \(currentLevelIndex) 關")
+                                    .font(.system(size: 14, weight: .bold))
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 3)
+                                    .background(Color.black.opacity(0.08))
+                                    .cornerRadius(6)
+                                
+                                Text("目標: >\(requiredScore)分")
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundColor(.secondary)
+                            }
+                            
                             Text("得分: \(score)")
                                 .font(.system(size: 28, weight: .bold, design: .rounded))
                                 .foregroundColor(.black)
@@ -219,14 +268,24 @@ struct ContentView: View {
                         
                         // Right Controls Panel
                         VStack(alignment: .trailing, spacing: 10) {
-                            HStack(spacing: 12) {
+                            HStack(spacing: 10) {
+                                // Home / Main Menu Button
+                                Button(action: returnToMainMenu) {
+                                    Image(systemName: "house.fill")
+                                        .font(.system(size: 16, weight: .bold))
+                                        .foregroundColor(.white)
+                                        .padding(10)
+                                        .background(Color.black)
+                                        .clipShape(Circle())
+                                }
+                                
                                 Button(action: {
                                     withAnimation {
                                         showSettings.toggle()
                                     }
                                 }) {
                                     Image(systemName: "slider.horizontal.3")
-                                        .font(.system(size: 18, weight: .bold))
+                                        .font(.system(size: 16, weight: .bold))
                                         .foregroundColor(.white)
                                         .padding(10)
                                         .background(Color.black)
@@ -236,11 +295,11 @@ struct ContentView: View {
                                 Button(action: resetGame) {
                                     HStack(spacing: 4) {
                                         Image(systemName: "arrow.clockwise")
-                                        Text("重置遊戲")
+                                        Text("重置")
                                     }
-                                    .font(.system(size: 14, weight: .bold))
+                                    .font(.system(size: 13, weight: .bold))
                                     .foregroundColor(.white)
-                                    .padding(.horizontal, 14)
+                                    .padding(.horizontal, 12)
                                     .padding(.vertical, 8)
                                     .background(Color.black)
                                     .cornerRadius(20)
@@ -329,7 +388,7 @@ struct ContentView: View {
                     Spacer()
                     
                     // Instruction Banner
-                    if gameState == .ready || canTrimWalkingStick {
+                    if (gameState == .ready || canTrimWalkingStick) && !isShowingMainMenu {
                         Text(canTrimWalkingStick ? "角色行走時點按螢幕剪短木板，每次 -2%" : "長按螢幕下半部伸長木板")
                             .font(.system(size: 16, weight: .bold))
                             .foregroundColor(.gray)
@@ -338,26 +397,92 @@ struct ContentView: View {
                 }
                 
                 // Touch Overlay for lower half of the screen only
-                VStack(spacing: 0) {
-                    Color.clear
-                        .frame(height: geometry.size.height / 2)
-                    
-                    Color.clear
-                        .frame(height: geometry.size.height / 2)
-                        .contentShape(Rectangle())
-                        .gesture(
-                            DragGesture(minimumDistance: 0)
-                                .onChanged { _ in
-                                    if gameState == .ready {
-                                        startGrowing()
+                if !isShowingMainMenu && gameState != .levelCleared && gameState != .gameOver {
+                    VStack(spacing: 0) {
+                        Color.clear
+                            .frame(height: geometry.size.height / 2)
+                        
+                        Color.clear
+                            .frame(height: geometry.size.height / 2)
+                            .contentShape(Rectangle())
+                            .gesture(
+                                DragGesture(minimumDistance: 0)
+                                    .onChanged { _ in
+                                        if gameState == .ready {
+                                            startGrowing()
+                                        }
                                     }
-                                }
-                                .onEnded { _ in
-                                    if gameState == .growing {
-                                        stopGrowingAndRotate()
+                                    .onEnded { _ in
+                                        if gameState == .growing {
+                                            stopGrowingAndRotate()
+                                        }
                                     }
+                            )
+                    }
+                }
+                
+                // Level Cleared Overlay (必須按下按鈕才進入下一關)
+                if gameState == .levelCleared {
+                    ZStack {
+                        Color.black.opacity(0.45)
+                            .ignoresSafeArea()
+                        
+                        VStack(spacing: 20) {
+                            Text("🎉 恭喜通關！")
+                                .font(.system(size: 32, weight: .black))
+                                .foregroundColor(.green)
+                            
+                            Text("已成功通過 第 \(currentLevelIndex) 關！")
+                                .font(.system(size: 20, weight: .bold))
+                                .foregroundColor(.black)
+                            
+                            VStack(spacing: 6) {
+                                Text("最終得分: \(score)")
+                                    .font(.system(size: 18, weight: .bold))
+                                    .foregroundColor(.black)
+                                Text("通關要求: > \(requiredScore) 分")
+                                    .font(.system(size: 14))
+                                    .foregroundColor(.gray)
+                            }
+                            .padding(.vertical, 4)
+                            
+                            VStack(spacing: 12) {
+                                // 核心按鈕：按下按鈕才進入下一關
+                                Button(action: nextLevel) {
+                                    HStack {
+                                        Image(systemName: "arrow.right.circle.fill")
+                                        Text("進入第 \(currentLevelIndex + 1) 關")
+                                    }
+                                    .font(.system(size: 18, weight: .bold))
+                                    .foregroundColor(.white)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 12)
+                                    .background(Color.green)
+                                    .cornerRadius(25)
                                 }
-                        )
+                                
+                                Button(action: returnToMainMenu) {
+                                    HStack {
+                                        Image(systemName: "house.fill")
+                                        Text("返回主選單")
+                                    }
+                                    .font(.system(size: 16, weight: .bold))
+                                    .foregroundColor(.black)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 10)
+                                    .background(Color.gray.opacity(0.15))
+                                    .cornerRadius(25)
+                                }
+                            }
+                            .padding(.horizontal, 10)
+                        }
+                        .padding(28)
+                        .frame(maxWidth: 320)
+                        .background(Color.white)
+                        .cornerRadius(20)
+                        .shadow(radius: 12)
+                    }
+                    .frame(width: geometry.size.width, height: geometry.size.height)
                 }
                 
                 // Game Over Overlay
@@ -375,28 +500,200 @@ struct ContentView: View {
                                 .font(.system(size: 22, weight: .bold))
                                 .foregroundColor(.black)
                             
-                            Button(action: resetGame) {
-                                Text("再試一次")
+                            VStack(spacing: 12) {
+                                Button(action: resetGame) {
+                                    HStack {
+                                        Image(systemName: "arrow.clockwise")
+                                        Text("再試一次")
+                                    }
                                     .font(.system(size: 18, weight: .bold))
                                     .foregroundColor(.white)
-                                    .padding(.horizontal, 30)
+                                    .frame(maxWidth: .infinity)
                                     .padding(.vertical, 12)
                                     .background(Color.black)
                                     .cornerRadius(25)
+                                }
+                                
+                                Button(action: returnToMainMenu) {
+                                    HStack {
+                                        Image(systemName: "house.fill")
+                                        Text("返回主選單")
+                                    }
+                                    .font(.system(size: 16, weight: .bold))
+                                    .foregroundColor(.black)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 10)
+                                    .background(Color.gray.opacity(0.15))
+                                    .cornerRadius(25)
+                                }
                             }
+                            .padding(.horizontal, 10)
                         }
-                        .padding(30)
+                        .padding(28)
+                        .frame(maxWidth: 320)
                         .background(Color.white)
                         .cornerRadius(20)
                         .shadow(radius: 10)
                     }
                     .frame(width: geometry.size.width, height: geometry.size.height)
                 }
+                
+                // 主畫面與關卡選擇視窗 (Main Menu Overlay)
+                if isShowingMainMenu {
+                    ZStack {
+                        Color.white
+                            .ignoresSafeArea()
+                        
+                        ScrollView {
+                            VStack(spacing: 22) {
+                                // 頂部大標題與角色動畫展示
+                                VStack(spacing: 12) {
+                                    StickmanView(isWalking: true)
+                                        .scaleEffect(1.3)
+                                        .frame(height: 55)
+                                        .padding(.top, 20)
+                                    
+                                    Text("火柴人搭橋冒險")
+                                        .font(.system(size: 30, weight: .black, design: .rounded))
+                                        .foregroundColor(.black)
+                                    
+                                    Text("精準控制木板長度・挑戰多層關卡")
+                                        .font(.system(size: 14, weight: .medium))
+                                        .foregroundColor(.gray)
+                                }
+                                
+                                // 存檔系統資訊卡片
+                                HStack(spacing: 24) {
+                                    VStack(spacing: 4) {
+                                        Text("已通過關卡")
+                                            .font(.system(size: 13, weight: .medium))
+                                            .foregroundColor(.gray)
+                                        Text("\(clearedMaxLevel) 關")
+                                            .font(.system(size: 24, weight: .heavy, design: .rounded))
+                                            .foregroundColor(.green)
+                                    }
+                                    
+                                    Divider()
+                                        .frame(height: 35)
+                                    
+                                    VStack(spacing: 4) {
+                                        Text("最高歷史得分")
+                                            .font(.system(size: 13, weight: .medium))
+                                            .foregroundColor(.gray)
+                                        Text("\(highScore) 分")
+                                            .font(.system(size: 24, weight: .heavy, design: .rounded))
+                                            .foregroundColor(.orange)
+                                    }
+                                }
+                                .padding(.horizontal, 24)
+                                .padding(.vertical, 14)
+                                .background(Color.black.opacity(0.04))
+                                .cornerRadius(16)
+                                
+                                // 繼續最新挑戰按鈕
+                                Button(action: {
+                                    startLevel(unlockedMaxLevel)
+                                }) {
+                                    HStack {
+                                        Image(systemName: "play.fill")
+                                        Text("繼續挑戰 (第 \(unlockedMaxLevel) 關)")
+                                    }
+                                    .font(.system(size: 18, weight: .bold))
+                                    .foregroundColor(.white)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 14)
+                                    .background(Color.black)
+                                    .cornerRadius(18)
+                                    .shadow(color: Color.black.opacity(0.2), radius: 6, x: 0, y: 3)
+                                }
+                                .padding(.horizontal, 24)
+                                
+                                Divider()
+                                    .padding(.horizontal, 24)
+                                    .padding(.vertical, 4)
+                                
+                                // 主選單關卡選擇區域
+                                VStack(alignment: .leading, spacing: 14) {
+                                    HStack {
+                                        Text("關卡選擇")
+                                            .font(.system(size: 20, weight: .bold))
+                                            .foregroundColor(.black)
+                                        Spacer()
+                                        Text("點擊已通過或已解鎖關卡")
+                                            .font(.system(size: 12))
+                                            .foregroundColor(.gray)
+                                    }
+                                    .padding(.horizontal, 24)
+                                    
+                                    // 關卡網格卡片列表
+                                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
+                                        ForEach(1...10, id: \.self) { level in
+                                            let isCleared = level <= clearedMaxLevel
+                                            let isUnlocked = level <= unlockedMaxLevel
+                                            let req = getRequiredScore(for: level)
+                                            
+                                            Button(action: {
+                                                if isUnlocked {
+                                                    startLevel(level)
+                                                }
+                                            }) {
+                                                VStack(spacing: 6) {
+                                                    HStack {
+                                                        Text("第 \(level) 關")
+                                                            .font(.system(size: 16, weight: .bold))
+                                                            .foregroundColor(isUnlocked ? .black : .gray)
+                                                        Spacer()
+                                                        if isCleared {
+                                                            Image(systemName: "checkmark.seal.fill")
+                                                                .foregroundColor(.green)
+                                                        } else if isUnlocked {
+                                                            Image(systemName: "play.circle.fill")
+                                                                .foregroundColor(.blue)
+                                                        } else {
+                                                            Image(systemName: "lock.fill")
+                                                                .foregroundColor(.gray.opacity(0.6))
+                                                        }
+                                                    }
+                                                    
+                                                    HStack {
+                                                        Text("目標: >\(req)分")
+                                                            .font(.system(size: 12, weight: .medium))
+                                                            .foregroundColor(.secondary)
+                                                        Spacer()
+                                                    }
+                                                    
+                                                    HStack {
+                                                        Text(isCleared ? "已通過 ⭐" : (isUnlocked ? "可挑戰 🚀" : "未解鎖 🔒"))
+                                                            .font(.system(size: 11, weight: .bold))
+                                                            .foregroundColor(isCleared ? .green : (isUnlocked ? .blue : .gray))
+                                                        Spacer()
+                                                    }
+                                                }
+                                                .padding(12)
+                                                .background(isCleared ? Color.green.opacity(0.08) : (isUnlocked ? Color.blue.opacity(0.06) : Color.black.opacity(0.03)))
+                                                .cornerRadius(12)
+                                                .overlay(
+                                                    RoundedRectangle(cornerRadius: 12)
+                                                        .stroke(isCleared ? Color.green.opacity(0.3) : (isUnlocked ? Color.blue.opacity(0.3) : Color.clear), lineWidth: 1.5)
+                                                )
+                                            }
+                                            .disabled(!isUnlocked)
+                                        }
+                                    }
+                                    .padding(.horizontal, 24)
+                                }
+                                .padding(.bottom, 30)
+                            }
+                        }
+                    }
+                    .frame(width: geometry.size.width, height: geometry.size.height)
+                    .transition(.opacity)
+                }
             }
             .simultaneousGesture(
                 TapGesture()
                     .onEnded {
-                        if gameState == .walking && canTrimWalkingStick {
+                        if !isShowingMainMenu && gameState == .walking && canTrimWalkingStick {
                             trimWalkingStickByTap()
                         }
                     }
@@ -419,6 +716,34 @@ struct ContentView: View {
     
     // MARK: - Game Setup & Logic
     
+    private func getRequiredScore(for level: Int) -> Int {
+        levelRequirements[level] ?? (level * 5)
+    }
+    
+    private func startLevel(_ level: Int) {
+        growTimer?.invalidate()
+        growTimer = nil
+        rescueWalkTimer?.invalidate()
+        rescueWalkTimer = nil
+        
+        currentLevelIndex = level
+        isShowingMainMenu = false
+        withAnimation {
+            setupInitialGame()
+        }
+    }
+    
+    private func returnToMainMenu() {
+        growTimer?.invalidate()
+        growTimer = nil
+        rescueWalkTimer?.invalidate()
+        rescueWalkTimer = nil
+        gameState = .ready
+        withAnimation {
+            isShowingMainMenu = true
+        }
+    }
+    
     private func setupInitialGame() {
         score = 0
         cameraOffsetX = 0
@@ -432,6 +757,8 @@ struct ContentView: View {
         trimmingBaseStickLength = 0
         canTrimWalkingStick = false
         didTrimWalkingStick = false
+        
+        requiredScore = getRequiredScore(for: currentLevelIndex)
         
         // Spawn first target platform on screen
         targetPlatformWidth = generatePlatformWidth(from: currentPlatformWidth)
@@ -448,6 +775,17 @@ struct ContentView: View {
         growTimer = nil
         rescueWalkTimer?.invalidate()
         rescueWalkTimer = nil
+        withAnimation {
+            setupInitialGame()
+        }
+    }
+    
+    private func nextLevel() {
+        growTimer?.invalidate()
+        growTimer = nil
+        rescueWalkTimer?.invalidate()
+        rescueWalkTimer = nil
+        currentLevelIndex += 1
         withAnimation {
             setupInitialGame()
         }
@@ -471,6 +809,7 @@ struct ContentView: View {
     }
     
     private func startGrowing() {
+        guard !isShowingMainMenu else { return }
         gameState = .growing
         statusMessage = nil
         
@@ -541,7 +880,18 @@ struct ContentView: View {
         
         let destinationX = targetPlatformX + targetPlatformWidth - 14
         walkAcrossStick(destinationX: destinationX) {
-            shiftWorldToNextPlatform()
+            // 當玩家走到目標平台時判斷分數，若分數 > 關卡需要的分數，則儲存已通過關卡並顯示通關畫面
+            if score > requiredScore {
+                if currentLevelIndex > clearedMaxLevel {
+                    clearedMaxLevel = currentLevelIndex
+                }
+                if currentLevelIndex + 1 > unlockedMaxLevel {
+                    unlockedMaxLevel = currentLevelIndex + 1
+                }
+                gameState = .levelCleared
+            } else {
+                shiftWorldToNextPlatform()
+            }
         }
     }
     
