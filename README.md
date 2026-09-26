@@ -65,5 +65,3 @@ SwiftUI 搭橋小遊戲：長按控制木板長度，放手讓火柴人跨越平
 - 補上每個開發版本的畫面截圖。
 
 作業題目：[使用 AI 創作人生第一個 App](https://medium.com/p/934495e1a28d)。
-
-本 README 與配套 media 資料夾由 AI 協助整理；此檔仍是待加入 GitHub 的草稿。
