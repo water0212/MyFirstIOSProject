@@ -1,0 +1,42 @@
+{
+  "source": "螢幕錄影 2026-09-23 下午1.28.41.mov",
+  "duration_seconds": 46.733333,
+  "original_size": [
+    4096,
+    2304
+  ],
+  "screenshot_crop_xyxy": [
+    1780,
+    487,
+    2355,
+    1668
+  ],
+  "screenshots": [
+    {
+      "file": "01-menu.png",
+      "time_seconds": 1
+    },
+    {
+      "file": "02-ready.png",
+      "time_seconds": 4.2
+    },
+    {
+      "file": "03-perfect.png",
+      "time_seconds": 16.6
+    },
+    {
+      "file": "04-clear.png",
+      "time_seconds": 12.5
+    },
+    {
+      "file": "05-game-over.png",
+      "time_seconds": 37.4
+    },
+    {
+      "file": "06-progress.png",
+      "time_seconds": 41.6
+    }
+  ],
+  "video": "原錄影前44秒，裁切手機範圍，無聲輸出，未重畫遊戲內容",
+  "gif": "影片前26秒，10 fps，寬360px"
+}
